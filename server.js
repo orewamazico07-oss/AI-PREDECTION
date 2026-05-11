@@ -8,8 +8,12 @@ app.use(cors());
 
 const PORT = process.env.PORT || 3000;
 
-const API =
+// ORIGINAL RESULT API
+
+const SOURCE_API =
 "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
+
+// STORAGE
 
 let history = [];
 
@@ -21,9 +25,21 @@ let bots = {
     5:[]
 };
 
-let currentPrediction = null;
+// CURRENT MAIN PREDICTION
+
+let currentPrediction = {
+
+    prediction:
+    Math.random() > 0.5
+    ? "BIG"
+    : "SMALL",
+
+    bot:1
+};
 
 let lastIssue = "";
+
+// BIG SMALL
 
 function bigSmall(n){
 
@@ -32,7 +48,12 @@ function bigSmall(n){
     : "SMALL";
 }
 
-function strategy(id,n){
+// 5 AI MATH RANDOM SYSTEM
+
+function strategy(id,n,last){
+
+    // AI 1
+    // EVEN ODD
 
     if(id==1){
 
@@ -41,6 +62,9 @@ function strategy(id,n){
         : "SMALL";
     }
 
+    // AI 2
+    // REVERSE
+
     if(id==2){
 
         return n >= 5
@@ -48,19 +72,31 @@ function strategy(id,n){
         : "BIG";
     }
 
+    // AI 3
+    // MOD RANDOM
+
     if(id==3){
 
-        return n % 3 == 0
+        return (
+            n +
+            Math.floor(Math.random()*10)
+        ) % 2 == 0
         ? "BIG"
         : "SMALL";
     }
+
+    // AI 4
+    // FOLLOW LAST
 
     if(id==4){
 
-        return n % 2 == 1
-        ? "BIG"
-        : "SMALL";
+        return last=="BIG"
+        ? "SMALL"
+        : "BIG";
     }
+
+    // AI 5
+    // PURE RANDOM
 
     if(id==5){
 
@@ -70,6 +106,8 @@ function strategy(id,n){
     }
 }
 
+// MAIN SYSTEM
+
 function chooseMain(){
 
     let selectedBot = 1;
@@ -77,23 +115,28 @@ function chooseMain(){
     let lastMain =
     history[history.length - 1];
 
+    // যদি last LOSS হয়
+    // তাহলে যেই bot এর টানা 2 WIN
+    // সেই bot follow
+
     if(lastMain &&
        lastMain.status=="LOSS"){
 
         for(let i=1;i<=5;i++){
 
-            let bot = bots[i];
+            let bot =
+            bots[i];
 
             let last2 =
             bot.slice(-2);
 
-            let streak =
+            let streak2 =
             last2.length==2 &&
             last2.every(
             x=>x.status=="WIN"
             );
 
-            if(streak){
+            if(streak2){
 
                 selectedBot = i;
 
@@ -102,6 +145,8 @@ function chooseMain(){
         }
 
     }else{
+
+        // normal best AI
 
         let maxWin = 0;
 
@@ -133,24 +178,34 @@ function chooseMain(){
     return {
 
         prediction:
-        last?.prediction || "--",
+        last?.prediction ||
+
+        (
+            Math.random() > 0.5
+            ? "BIG"
+            : "SMALL"
+        ),
 
         bot:selectedBot
     };
 }
+
+// UPDATE SYSTEM
 
 async function updatePrediction(){
 
     try{
 
         const res =
-        await axios.get(API);
+        await axios.get(SOURCE_API);
 
         const latest =
         res.data.data.list[0];
 
         const issue =
         latest.issueNumber;
+
+        // duplicate stop
 
         if(issue === lastIssue){
 
@@ -168,13 +223,15 @@ async function updatePrediction(){
         let period =
         issue.slice(-2);
 
-        // old prediction result
+        // OLD MAIN RESULT CHECK
 
         if(currentPrediction){
 
-            let status =
+            let mainStatus =
+
             currentPrediction.prediction
             == result
+
             ? "WIN"
             : "LOSS";
 
@@ -188,23 +245,39 @@ async function updatePrediction(){
 
                 result,
 
-                status,
+                status:
+                mainStatus,
 
                 number,
 
-                period
+                period,
+
+                time:
+                new Date()
+                .toLocaleTimeString()
             });
         }
 
-        // bot update
+        // AI UPDATE
 
         for(let i=1;i<=5;i++){
 
+            let lastBot =
+            bots[i][
+                bots[i].length - 1
+            ];
+
             let prediction =
-            strategy(i,number);
+            strategy(
+                i,
+                number,
+                lastBot?.prediction
+            );
 
             let status =
+
             prediction == result
+
             ? "WIN"
             : "LOSS";
 
@@ -212,22 +285,28 @@ async function updatePrediction(){
 
                 prediction,
 
-                status,
-
                 result,
+
+                status,
 
                 period
             });
         }
 
-        // new prediction
+        // NEW MAIN PREDICTION
 
         currentPrediction =
         chooseMain();
 
         console.log(
-            "NEW:",
-            currentPrediction.prediction
+
+            "NEW PREDICTION =>",
+
+            currentPrediction.prediction,
+
+            "| BOT =>",
+
+            currentPrediction.bot
         );
 
     }catch(e){
@@ -236,9 +315,13 @@ async function updatePrediction(){
     }
 }
 
+// AUTO RUN
+
 updatePrediction();
 
 setInterval(updatePrediction,1000);
+
+// MAIN API
 
 app.get("/api",(req,res)=>{
 
@@ -247,33 +330,57 @@ app.get("/api",(req,res)=>{
     x=>x.status=="WIN"
     ).length;
 
+    let losses =
+    history.filter(
+    x=>x.status=="LOSS"
+    ).length;
+
     let total =
-    history.length;
+    wins + losses;
 
     let accuracy =
+
     total > 0
+
     ? ((wins/total)*100)
     .toFixed(2)
+
     : 0;
 
     res.json({
 
         prediction:
-        currentPrediction?.prediction || "--",
+        currentPrediction.prediction,
 
         follow:
-        currentPrediction?.bot || 1,
+        currentPrediction.bot,
+
+        wins,
+
+        losses,
 
         accuracy,
 
         history:
-        history.slice(-20).reverse()
+        history.slice(-10).reverse()
     });
 });
+
+// ROOT
+
+app.get("/",(req,res)=>{
+
+    res.send("AI SERVER RUNNING");
+});
+
+// START
 
 app.listen(PORT,()=>{
 
     console.log(
-        "SERVER RUNNING"
+
+        "SERVER RUNNING ON",
+
+        PORT
     );
 });
