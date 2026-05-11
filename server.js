@@ -236,6 +236,8 @@ async function updatePrediction(){
     }
 }
 
+updatePrediction();
+
 setInterval(updatePrediction,1000);
 
 app.get("/api",(req,res)=>{
