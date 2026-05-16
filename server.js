@@ -1,28 +1,79 @@
-
 const express = require("express");
-const cors = require("cors");
 const axios = require("axios");
+const cors = require("cors");
 const fs = require("fs");
 
 const app = express();
 
 app.use(cors());
-app.use(express.json());
 
-/* =========================
-CONFIG
-========================= */
+const PORT = process.env.PORT || 3000;
 
 const API =
 "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
 
-const FETCH_INTERVAL = 30000;
+/* DATABASE */
 
-/* =========================
-PATTERNS
-========================= */
+if(!fs.existsSync("./database.json")){
 
-const PATTERNS = {
+fs.writeFileSync(
+"./database.json",
+
+JSON.stringify({
+
+livePrediction:"WAIT",
+livePeriod:null,
+history:[],
+stats:{
+totalSignals:0,
+totalWin:0,
+totalLoss:0,
+accuracy:0
+}
+
+},null,2)
+
+);
+
+}
+
+/* READ */
+
+function readDB(){
+
+return JSON.parse(
+fs.readFileSync("./database.json","utf8")
+);
+
+}
+
+/* SAVE */
+
+function saveDB(data){
+
+fs.writeFileSync(
+"./database.json",
+JSON.stringify(data,null,2)
+);
+
+}
+
+/* PREDICT */
+
+function predict(history){
+
+const arr = history
+.slice(0,4)
+.reverse()
+.map(i=>
+parseInt(i.number)>=5
+? "B"
+: "S"
+);
+
+const pattern = arr.join("");
+
+const map = {
 
 "BBBB":"BIG",
 "BBBS":"BIG",
@@ -46,164 +97,19 @@ const PATTERNS = {
 
 };
 
-/* =========================
-DATABASE
-========================= */
-
-const DB = "database.json";
-
-if(!fs.existsSync(DB)){
-
-fs.writeFileSync(DB,JSON.stringify({
-
-stats:{
-totalSignals:0,
-totalWin:0,
-totalLoss:0,
-accuracy:0,
-
-currentWinStreak:0,
-currentLossStreak:0,
-
-maxWinStreak:0,
-maxLossStreak:0,
-
-marketMode:"UNKNOWN",
-marketStrength:"NORMAL"
-},
-
-history:[],
-
-patterns:{},
-
-livePrediction:"WAIT",
-livePeriod:null
-
-},null,2));
-
-}
-
-/* =========================
-HELPER
-========================= */
-
-function readDB(){
-
-return JSON.parse(
-fs.readFileSync(DB,"utf8")
-);
-
-}
-
-function saveDB(data){
-
-fs.writeFileSync(
-DB,
-JSON.stringify(data,null,2)
-);
-
-}
-
-function getType(number){
-
-return parseInt(number) >= 5
-? "B"
-: "S";
-
-}
-
-/* =========================
-MARKET DETECT
-========================= */
-
-function detectMarket(history){
-
-const arr = history
-.slice(0,10)
-.map(i=>getType(i.number));
-
-const str = arr.join("");
-
-if(
-str.includes("BBBBBB") ||
-str.includes("SSSSSS")
-){
-
-return {
-
-mode:"TREND",
-strength:"STRONG"
-
-};
-
-}
-
-let chop = 0;
-
-for(let i=1;i<arr.length;i++){
-
-if(arr[i] !== arr[i-1]){
-
-chop++;
-
-}
-
-}
-
-if(chop >= 7){
-
-return {
-
-mode:"CHOPPY",
-strength:"DANGEROUS"
-
-};
-
-}
-
-return {
-
-mode:"NORMAL",
-strength:"MEDIUM"
-
-};
-
-}
-
-/* =========================
-PREDICT
-========================= */
-
-function generatePrediction(history){
-
-const pattern = history
-.slice(0,4)
-.reverse()
-.map(i=>getType(i.number))
-.join("");
-
-const prediction =
-PATTERNS[pattern] || "WAIT";
-
 return {
 
 pattern,
-prediction
+prediction:
+map[pattern] || "WAIT"
 
 };
 
 }
 
-/* =========================
-LIVE VARIABLES
-========================= */
+let oldPrediction = null;
 
-let previousPrediction = null;
-let previousPeriod = null;
-
-/* =========================
-MAIN BOT
-========================= */
+/* BOT */
 
 async function runBot(){
 
@@ -211,71 +117,34 @@ try{
 
 const res = await axios.get(API);
 
-const history =
+const list =
 res.data.data.list;
 
 const latest =
-history[0];
-
-const result =
-parseInt(latest.number) >= 5
-? "BIG"
-: "SMALL";
+list[0];
 
 const db = readDB();
 
-/* =========================
-CHECK WIN LOSS
-========================= */
+const currentResult =
+parseInt(latest.number)>=5
+? "BIG"
+: "SMALL";
 
-if(previousPrediction){
+/* WIN LOSS */
 
-const status =
-previousPrediction === result
-? "WIN"
-: "LOSS";
+if(oldPrediction){
 
 db.stats.totalSignals++;
 
-if(status === "WIN"){
+if(oldPrediction === currentResult){
 
 db.stats.totalWin++;
-
-db.stats.currentWinStreak++;
-
-db.stats.currentLossStreak = 0;
-
-if(
-db.stats.currentWinStreak >
-db.stats.maxWinStreak
-){
-
-db.stats.maxWinStreak =
-db.stats.currentWinStreak;
-
-}
 
 }else{
 
 db.stats.totalLoss++;
 
-db.stats.currentLossStreak++;
-
-db.stats.currentWinStreak = 0;
-
-if(
-db.stats.currentLossStreak >
-db.stats.maxLossStreak
-){
-
-db.stats.maxLossStreak =
-db.stats.currentLossStreak;
-
 }
-
-}
-
-/* ACCURACY */
 
 db.stats.accuracy = (
 
@@ -286,79 +155,35 @@ db.stats.totalSignals)
 
 ).toFixed(2);
 
-/* MARKET */
-
-const market =
-detectMarket(history);
-
-db.stats.marketMode =
-market.mode;
-
-db.stats.marketStrength =
-market.strength;
-
-/* PATTERN */
-
-const currentPattern = history
-.slice(0,4)
-.reverse()
-.map(i=>getType(i.number))
-.join("");
-
-if(!db.patterns[currentPattern]){
-
-db.patterns[currentPattern] = {
-
-total:0,
-win:0,
-loss:0,
-accuracy:0
-
-};
-
 }
 
-db.patterns[currentPattern].total++;
+/* NEXT */
 
-if(status === "WIN"){
+const next =
+predict(list);
 
-db.patterns[currentPattern].win++;
+oldPrediction =
+next.prediction;
 
-}else{
+db.livePrediction =
+next.prediction;
 
-db.patterns[currentPattern].loss++;
+db.livePeriod =
+String(
+Number(latest.issueNumber)+1
+);
 
-}
-
-db.patterns[currentPattern].accuracy = (
-
-(db.patterns[currentPattern].win /
-
-db.patterns[currentPattern].total)
-
-* 100
-
-).toFixed(2);
-
-/* SAVE HISTORY */
+/* SAVE */
 
 db.history.unshift({
 
 period:latest.issueNumber,
-
-prediction:previousPrediction,
-
-result,
-
-status,
-
-pattern:currentPattern,
-
+result:currentResult,
+prediction:oldPrediction,
+pattern:next.pattern,
 time:new Date().toLocaleString()
 
 });
-
-/* LAST 100 */
 
 if(db.history.length > 100){
 
@@ -366,33 +191,11 @@ db.history.pop();
 
 }
 
-}
-
-/* =========================
-NEXT PREDICTION
-========================= */
-
-const next =
-generatePrediction(history);
-
-previousPrediction =
-next.prediction;
-
-previousPeriod =
-String(
-BigInt(latest.issueNumber) + 1n
-);
-
-db.livePrediction =
-previousPrediction;
-
-db.livePeriod =
-previousPeriod;
-
 saveDB(db);
 
 console.log(
-`NEXT ${previousPeriod} => ${previousPrediction}`
+"NEXT =>",
+db.livePrediction
 );
 
 }catch(err){
@@ -403,38 +206,29 @@ console.log(err.message);
 
 }
 
-/* =========================
-AUTO RUN
-========================= */
+/* AUTO */
 
 setInterval(
 runBot,
-FETCH_INTERVAL
+30000
 );
 
 runBot();
 
-/* =========================
-API
-========================= */
+/* API */
 
 app.get("/api/live",(req,res)=>{
 
-const db = readDB();
-
-res.json(db);
+res.json(readDB());
 
 });
 
-/* =========================
-START SERVER
-========================= */
+/* START */
 
-app.listen(3000,()=>{
+app.listen(PORT,()=>{
 
 console.log(
-"SERVER RUNNING ON 3000"
+"SERVER RUNNING"
 );
 
 });
-```
