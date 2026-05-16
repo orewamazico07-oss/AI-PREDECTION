@@ -1,386 +1,440 @@
+
 const express = require("express");
-const axios = require("axios");
 const cors = require("cors");
+const axios = require("axios");
+const fs = require("fs");
 
 const app = express();
 
 app.use(cors());
+app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
+/* =========================
+CONFIG
+========================= */
 
-// ORIGINAL RESULT API
-
-const SOURCE_API =
+const API =
 "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
 
-// STORAGE
+const FETCH_INTERVAL = 30000;
 
-let history = [];
+/* =========================
+PATTERNS
+========================= */
 
-let bots = {
-    1:[],
-    2:[],
-    3:[],
-    4:[],
-    5:[]
+const PATTERNS = {
+
+"BBBB":"BIG",
+"BBBS":"BIG",
+"BBSB":"BIG",
+"BBSS":"BIG",
+
+"BSBB":"SMALL",
+"BSBS":"BIG",
+"BSSB":"SMALL",
+"BSSS":"BIG",
+
+"SBBB":"SMALL",
+"SBBS":"SMALL",
+"SBSB":"SMALL",
+"SBSS":"BIG",
+
+"SSBB":"BIG",
+"SSBS":"BIG",
+"SSSB":"SMALL",
+"SSSS":"SMALL"
+
 };
 
-// CURRENT MAIN PREDICTION
+/* =========================
+DATABASE
+========================= */
 
-let currentPrediction = {
+const DB = "database.json";
 
-    prediction:
-    Math.random() > 0.5
-    ? "BIG"
-    : "SMALL",
+if(!fs.existsSync(DB)){
 
-    bot:1
+fs.writeFileSync(DB,JSON.stringify({
+
+stats:{
+totalSignals:0,
+totalWin:0,
+totalLoss:0,
+accuracy:0,
+
+currentWinStreak:0,
+currentLossStreak:0,
+
+maxWinStreak:0,
+maxLossStreak:0,
+
+marketMode:"UNKNOWN",
+marketStrength:"NORMAL"
+},
+
+history:[],
+
+patterns:{},
+
+livePrediction:"WAIT",
+livePeriod:null
+
+},null,2));
+
+}
+
+/* =========================
+HELPER
+========================= */
+
+function readDB(){
+
+return JSON.parse(
+fs.readFileSync(DB,"utf8")
+);
+
+}
+
+function saveDB(data){
+
+fs.writeFileSync(
+DB,
+JSON.stringify(data,null,2)
+);
+
+}
+
+function getType(number){
+
+return parseInt(number) >= 5
+? "B"
+: "S";
+
+}
+
+/* =========================
+MARKET DETECT
+========================= */
+
+function detectMarket(history){
+
+const arr = history
+.slice(0,10)
+.map(i=>getType(i.number));
+
+const str = arr.join("");
+
+if(
+str.includes("BBBBBB") ||
+str.includes("SSSSSS")
+){
+
+return {
+
+mode:"TREND",
+strength:"STRONG"
+
 };
 
-let lastIssue = "";
-
-// BIG SMALL
-
-function bigSmall(n){
-
-    return n >= 5
-    ? "BIG"
-    : "SMALL";
 }
 
-// 5 AI MATH RANDOM SYSTEM
+let chop = 0;
 
-function strategy(id,n,last){
+for(let i=1;i<arr.length;i++){
 
-    // AI 1
-    // EVEN ODD
+if(arr[i] !== arr[i-1]){
 
-    if(id==1){
+chop++;
 
-        return n % 2 == 0
-        ? "BIG"
-        : "SMALL";
-    }
-
-    // AI 2
-    // REVERSE
-
-    if(id==2){
-
-        return n >= 5
-        ? "SMALL"
-        : "BIG";
-    }
-
-    // AI 3
-    // MOD RANDOM
-
-    if(id==3){
-
-        return (
-            n +
-            Math.floor(Math.random()*10)
-        ) % 2 == 0
-        ? "BIG"
-        : "SMALL";
-    }
-
-    // AI 4
-    // FOLLOW LAST
-
-    if(id==4){
-
-        return last=="BIG"
-        ? "SMALL"
-        : "BIG";
-    }
-
-    // AI 5
-    // PURE RANDOM
-
-    if(id==5){
-
-        return Math.random() > 0.5
-        ? "BIG"
-        : "SMALL";
-    }
 }
 
-// MAIN SYSTEM
-
-function chooseMain(){
-
-    let selectedBot = 1;
-
-    let lastMain =
-    history[history.length - 1];
-
-    // যদি last LOSS হয়
-    // তাহলে যেই bot এর টানা 2 WIN
-    // সেই bot follow
-
-    if(lastMain &&
-       lastMain.status=="LOSS"){
-
-        for(let i=1;i<=5;i++){
-
-            let bot =
-            bots[i];
-
-            let last2 =
-            bot.slice(-2);
-
-            let streak2 =
-            last2.length==2 &&
-            last2.every(
-            x=>x.status=="WIN"
-            );
-
-            if(streak2){
-
-                selectedBot = i;
-
-                break;
-            }
-        }
-
-    }else{
-
-        // normal best AI
-
-        let maxWin = 0;
-
-        for(let i=1;i<=5;i++){
-
-            let recent =
-            bots[i].slice(-3);
-
-            let wins =
-            recent.filter(
-            x=>x.status=="WIN"
-            ).length;
-
-            if(wins > maxWin){
-
-                maxWin = wins;
-
-                selectedBot = i;
-            }
-        }
-    }
-
-    let bot =
-    bots[selectedBot];
-
-    let last =
-    bot[bot.length - 1];
-
-    return {
-
-        prediction:
-        last?.prediction ||
-
-        (
-            Math.random() > 0.5
-            ? "BIG"
-            : "SMALL"
-        ),
-
-        bot:selectedBot
-    };
 }
 
-// UPDATE SYSTEM
+if(chop >= 7){
 
-async function updatePrediction(){
+return {
 
-    try{
+mode:"CHOPPY",
+strength:"DANGEROUS"
 
-        const res =
-        await axios.get(SOURCE_API);
+};
 
-        const latest =
-        res.data.data.list[0];
-
-        const issue =
-        latest.issueNumber;
-
-        // duplicate stop
-
-        if(issue === lastIssue){
-
-            return;
-        }
-
-        lastIssue = issue;
-
-        let number =
-        Number(latest.number);
-
-        let result =
-        bigSmall(number);
-
-        let period =
-        issue.slice(-2);
-
-        // OLD MAIN RESULT CHECK
-
-        if(currentPrediction){
-
-            let mainStatus =
-
-            currentPrediction.prediction
-            == result
-
-            ? "WIN"
-            : "LOSS";
-
-            history.push({
-
-                prediction:
-                currentPrediction.prediction,
-
-                bot:
-                currentPrediction.bot,
-
-                result,
-
-                status:
-                mainStatus,
-
-                number,
-
-                period,
-
-                time:
-                new Date()
-                .toLocaleTimeString()
-            });
-        }
-
-        // AI UPDATE
-
-        for(let i=1;i<=5;i++){
-
-            let lastBot =
-            bots[i][
-                bots[i].length - 1
-            ];
-
-            let prediction =
-            strategy(
-                i,
-                number,
-                lastBot?.prediction
-            );
-
-            let status =
-
-            prediction == result
-
-            ? "WIN"
-            : "LOSS";
-
-            bots[i].push({
-
-                prediction,
-
-                result,
-
-                status,
-
-                period
-            });
-        }
-
-        // NEW MAIN PREDICTION
-
-        currentPrediction =
-        chooseMain();
-
-        console.log(
-
-            "NEW PREDICTION =>",
-
-            currentPrediction.prediction,
-
-            "| BOT =>",
-
-            currentPrediction.bot
-        );
-
-    }catch(e){
-
-        console.log(e.message);
-    }
 }
 
-// AUTO RUN
+return {
 
-updatePrediction();
+mode:"NORMAL",
+strength:"MEDIUM"
 
-setInterval(updatePrediction,1000);
+};
 
-// MAIN API
+}
 
-app.get("/api",(req,res)=>{
+/* =========================
+PREDICT
+========================= */
 
-    let wins =
-    history.filter(
-    x=>x.status=="WIN"
-    ).length;
+function generatePrediction(history){
 
-    let losses =
-    history.filter(
-    x=>x.status=="LOSS"
-    ).length;
+const pattern = history
+.slice(0,4)
+.reverse()
+.map(i=>getType(i.number))
+.join("");
 
-    let total =
-    wins + losses;
+const prediction =
+PATTERNS[pattern] || "WAIT";
 
-    let accuracy =
+return {
 
-    total > 0
+pattern,
+prediction
 
-    ? ((wins/total)*100)
-    .toFixed(2)
+};
 
-    : 0;
+}
 
-    res.json({
+/* =========================
+LIVE VARIABLES
+========================= */
 
-        prediction:
-        currentPrediction.prediction,
+let previousPrediction = null;
+let previousPeriod = null;
 
-        follow:
-        currentPrediction.bot,
+/* =========================
+MAIN BOT
+========================= */
 
-        wins,
+async function runBot(){
 
-        losses,
+try{
 
-        accuracy,
+const res = await axios.get(API);
 
-        history:
-        history.slice(-10).reverse()
-    });
+const history =
+res.data.data.list;
+
+const latest =
+history[0];
+
+const result =
+parseInt(latest.number) >= 5
+? "BIG"
+: "SMALL";
+
+const db = readDB();
+
+/* =========================
+CHECK WIN LOSS
+========================= */
+
+if(previousPrediction){
+
+const status =
+previousPrediction === result
+? "WIN"
+: "LOSS";
+
+db.stats.totalSignals++;
+
+if(status === "WIN"){
+
+db.stats.totalWin++;
+
+db.stats.currentWinStreak++;
+
+db.stats.currentLossStreak = 0;
+
+if(
+db.stats.currentWinStreak >
+db.stats.maxWinStreak
+){
+
+db.stats.maxWinStreak =
+db.stats.currentWinStreak;
+
+}
+
+}else{
+
+db.stats.totalLoss++;
+
+db.stats.currentLossStreak++;
+
+db.stats.currentWinStreak = 0;
+
+if(
+db.stats.currentLossStreak >
+db.stats.maxLossStreak
+){
+
+db.stats.maxLossStreak =
+db.stats.currentLossStreak;
+
+}
+
+}
+
+/* ACCURACY */
+
+db.stats.accuracy = (
+
+(db.stats.totalWin /
+db.stats.totalSignals)
+
+* 100
+
+).toFixed(2);
+
+/* MARKET */
+
+const market =
+detectMarket(history);
+
+db.stats.marketMode =
+market.mode;
+
+db.stats.marketStrength =
+market.strength;
+
+/* PATTERN */
+
+const currentPattern = history
+.slice(0,4)
+.reverse()
+.map(i=>getType(i.number))
+.join("");
+
+if(!db.patterns[currentPattern]){
+
+db.patterns[currentPattern] = {
+
+total:0,
+win:0,
+loss:0,
+accuracy:0
+
+};
+
+}
+
+db.patterns[currentPattern].total++;
+
+if(status === "WIN"){
+
+db.patterns[currentPattern].win++;
+
+}else{
+
+db.patterns[currentPattern].loss++;
+
+}
+
+db.patterns[currentPattern].accuracy = (
+
+(db.patterns[currentPattern].win /
+
+db.patterns[currentPattern].total)
+
+* 100
+
+).toFixed(2);
+
+/* SAVE HISTORY */
+
+db.history.unshift({
+
+period:latest.issueNumber,
+
+prediction:previousPrediction,
+
+result,
+
+status,
+
+pattern:currentPattern,
+
+time:new Date().toLocaleString()
+
 });
 
-// ROOT
+/* LAST 100 */
 
-app.get("/",(req,res)=>{
+if(db.history.length > 100){
 
-    res.send("AI SERVER RUNNING");
+db.history.pop();
+
+}
+
+}
+
+/* =========================
+NEXT PREDICTION
+========================= */
+
+const next =
+generatePrediction(history);
+
+previousPrediction =
+next.prediction;
+
+previousPeriod =
+String(
+BigInt(latest.issueNumber) + 1n
+);
+
+db.livePrediction =
+previousPrediction;
+
+db.livePeriod =
+previousPeriod;
+
+saveDB(db);
+
+console.log(
+`NEXT ${previousPeriod} => ${previousPrediction}`
+);
+
+}catch(err){
+
+console.log(err.message);
+
+}
+
+}
+
+/* =========================
+AUTO RUN
+========================= */
+
+setInterval(
+runBot,
+FETCH_INTERVAL
+);
+
+runBot();
+
+/* =========================
+API
+========================= */
+
+app.get("/api/live",(req,res)=>{
+
+const db = readDB();
+
+res.json(db);
+
 });
 
-// START
+/* =========================
+START SERVER
+========================= */
 
-app.listen(PORT,()=>{
+app.listen(3000,()=>{
 
-    console.log(
+console.log(
+"SERVER RUNNING ON 3000"
+);
 
-        "SERVER RUNNING ON",
-
-        PORT
-    );
 });
+```
