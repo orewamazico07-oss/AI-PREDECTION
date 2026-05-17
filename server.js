@@ -5,87 +5,81 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 
-// তোমার Telegram Bot Token
 const BOT_TOKEN = "7567919757:AAHm36nUzIdBY7GKMBds2xwAA6QfODBK8U4";
-
-// তোমার Chat ID
 const CHAT_ID = "8272290670";
 
-// Wingo API
 const API_URL =
   "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
 
-let lastIssue = null;
+let lastIssue = "";
 
-// Telegram এ message পাঠানোর function
 async function sendTelegramMessage(message) {
   try {
-    const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
+    const telegramURL = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
 
-    await axios.post(url, {
+    const response = await axios.post(telegramURL, {
       chat_id: CHAT_ID,
       text: message,
     });
 
-    console.log("Telegram message sent");
-  } catch (error) {
-    console.log("Telegram Error:", error.message);
+    console.log("Message Sent:", response.data);
+  } catch (err) {
+    console.log(
+      "Telegram Error:",
+      err.response?.data || err.message
+    );
   }
 }
 
-// API check করার function
 async function checkResult() {
   try {
     const response = await axios.get(API_URL);
 
-    const data = response.data;
+    console.log("API DATA:", response.data);
 
-    // নিচের path টা API response অনুযায়ী adjust লাগতে পারে
-    const result = data?.data?.list?.[0];
+    const result =
+      response.data?.data?.list?.[0];
 
     if (!result) {
       console.log("No result found");
       return;
     }
 
-    const issue = result.issueNumber || result.issue || "Unknown";
-    const number = result.number || result.openNumber || "0";
-    const color = result.color || "Unknown";
+    const issue = result.issueNumber || result.issue;
+    const number = result.number;
 
-    // duplicate message আটকানোর জন্য
     if (issue !== lastIssue) {
       lastIssue = issue;
 
-      let bigSmall = Number(number) >= 5 ? "BIG" : "SMALL";
+      const size =
+        Number(number) >= 5 ? "BIG" : "SMALL";
 
       const message = `
 🎯 WINGO RESULT
 
 🆔 Issue: ${issue}
 🔢 Number: ${number}
-📌 Size: ${bigSmall}
-🎨 Color: ${color}
-
-⏰ Auto Update Every 30 Seconds
+📌 ${size}
       `;
-
-      console.log(message);
 
       await sendTelegramMessage(message);
     }
-  } catch (error) {
-    console.log("API Error:", error.message);
+  } catch (err) {
+    console.log(
+      "API Error:",
+      err.response?.data || err.message
+    );
   }
 }
 
-// প্রতি 30 সেকেন্ড পর API check করবে
+checkResult();
+
 setInterval(checkResult, 30000);
 
-// server start
 app.get("/", (req, res) => {
-  res.send("Wingo Telegram Bot Running");
+  res.send("Bot Running");
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Server Running On ${PORT}`);
 });
