@@ -2,86 +2,130 @@ const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const cron = require('node-cron');
 
-// Configuration
-const TELEGRAM_BOT_TOKEN = '7567919757:AAEKbFDInu7mskhyxlW78_qtQrMBXUF1zV4'; // Replace with your bot token
-const CHAT_ID = 'ID: 7567919757'; // Replace with your Telegram chat ID
+// Environment variables থেকে Token নিবে
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const CHAT_ID = process.env.CHAT_ID;
 const API_URL = 'https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json';
 
-// Initialize bot
-const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
+// Token চেক
+if (!TELEGRAM_BOT_TOKEN || !CHAT_ID) {
+    console.error('ERROR: TELEGRAM_BOT_TOKEN and CHAT_ID must be set in environment variables');
+    process.exit(1);
+}
 
-// Store last fetched data to avoid duplicate sends
+// Bot initialization with polling options
+const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { 
+    polling: {
+        interval: 300,
+        autoStart: true,
+        params: {
+            timeout: 10
+        }
+    }
+});
+
 let lastIssueNumber = null;
 let lastResult = null;
 
-// Function to fetch data from API
+// Proxy এবং headers সহ API fetch
 async function fetchLotteryData() {
     try {
         const response = await axios.get(API_URL, {
-            timeout: 10000,
+            timeout: 15000,
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': 'https://ar-lottery01.com/',
+                'Origin': 'https://ar-lottery01.com'
+            },
+            // CORS bypass এর জন্য
+            withCredentials: false
         });
         
         if (response.data && response.data.code === 200) {
+            console.log('API data fetched successfully');
             return response.data;
         } else {
-            console.log('API response error:', response.data);
+            console.log('API response:', response.data);
             return null;
         }
     } catch (error) {
-        console.error('Error fetching data:', error.message);
+        if (error.response) {
+            console.log(`API Error ${error.response.status}: ${error.response.statusText}`);
+            // 403 error এর জন্য alternative approach
+            if (error.response.status === 403) {
+                console.log('Trying alternative method...');
+                return await fetchWithAlternativeMethod();
+            }
+        } else {
+            console.error('Network Error:', error.message);
+        }
         return null;
     }
 }
 
-// Function to format data for Telegram message
+// Alternative method with different headers
+async function fetchWithAlternativeMethod() {
+    try {
+        const response = await axios.get(API_URL, {
+            timeout: 15000,
+            headers: {
+                'User-Agent': 'curl/7.68.0',
+                'Accept': '*/*',
+                'Cache-Control': 'no-cache'
+            }
+        });
+        return response.data;
+    } catch (error) {
+        console.log('Alternative method also failed');
+        return null;
+    }
+}
+
 function formatTelegramMessage(data) {
     if (!data || !data.data || !data.data.list || data.data.list.length === 0) {
-        return '⚠️ No data available from API';
+        return '⚠️ API থেকে ডেটা পাওয়া যাচ্ছে না';
     }
     
     const latestIssue = data.data.list[0];
     
-    let message = '🎯 **WinGo Lottery Result** 🎯\n';
+    let message = '🎯 **উইনগো লটারি রেজাল্ট** 🎯\n';
     message += '━'.repeat(25) + '\n';
-    message += `📅 **Issue Number:** ${latestIssue.issueNumber || 'N/A'}\n`;
-    message += `🎲 **Result:** ${latestIssue.winNumber || 'N/A'}\n`;
-    message += `📊 **Sum:** ${latestIssue.sumNumber || 'N/A'}\n`;
+    message += `📅 **ইস্যু নম্বর:** ${latestIssue.issueNumber || 'N/A'}\n`;
+    message += `🎲 **রেজাল্ট:** ${latestIssue.winNumber || 'N/A'}\n`;
+    message += `📊 **সাম:** ${latestIssue.sumNumber || 'N/A'}\n`;
     
     if (latestIssue.drawTime) {
         const drawTime = new Date(latestIssue.drawTime);
-        message += `⏰ **Draw Time:** ${drawTime.toLocaleString()}\n`;
+        message += `⏰ **ড্র সময়:** ${drawTime.toLocaleString('bn-BD')}\n`;
     }
     
     message += '━'.repeat(25) + '\n';
-    message += '🤖 Powered by Telegram Bot';
+    message += '🤖 বট দ্বারা স্বয়ংক্রিয়';
     
     return message;
 }
 
-// Function to send message to Telegram
 async function sendToTelegram(message) {
     try {
         await bot.sendMessage(CHAT_ID, message, {
             parse_mode: 'Markdown',
             disable_web_page_preview: true
         });
-        console.log('Message sent to Telegram successfully');
+        console.log('✅ Message sent to Telegram');
     } catch (error) {
-        console.error('Error sending to Telegram:', error.message);
+        console.error('❌ Telegram error:', error.message);
     }
 }
 
-// Function to check and send new data
 async function checkAndSendNewData() {
-    console.log('Checking for new lottery data...', new Date().toLocaleString());
+    console.log('🔍 Checking for new data...', new Date().toLocaleString());
     
     const data = await fetchLotteryData();
     
     if (!data || !data.data || !data.data.list || data.data.list.length === 0) {
-        console.log('No valid data received');
+        console.log('❌ No valid data received');
         return;
     }
     
@@ -89,94 +133,88 @@ async function checkAndSendNewData() {
     const currentIssueNumber = latestIssue.issueNumber;
     const currentResult = latestIssue.winNumber;
     
-    // Check if this is new data
     if (currentIssueNumber !== lastIssueNumber || currentResult !== lastResult) {
-        console.log(`New data found! Issue: ${currentIssueNumber}, Result: ${currentResult}`);
-        
+        console.log(`🆕 New data! Issue: ${currentIssueNumber}, Result: ${currentResult}`);
         const message = formatTelegramMessage(data);
         await sendToTelegram(message);
         
-        // Update stored data
         lastIssueNumber = currentIssueNumber;
         lastResult = currentResult;
     } else {
-        console.log('No new data found');
+        console.log('📭 No new data found');
     }
 }
 
-// Command handlers
+// Bot commands - Bengali language support
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
-    const welcomeMessage = `🤖 **Welcome to Lottery Bot!** 🤖\n\n` +
-        `Available commands:\n` +
-        `/check - Check latest lottery result\n` +
-        `/status - Check bot status\n` +
-        `/help - Show this help message\n\n` +
-        `Bot will automatically send new results when available.`;
+    const welcomeMessage = `🤖 **লটারি বটে স্বাগতম!** 🤖\n\n` +
+        `কমান্ড সমূহ:\n` +
+        `/check - সর্বশেষ রেজাল্ট দেখুন\n` +
+        `/status - বটের অবস্থা দেখুন\n` +
+        `/help - হেল্প দেখুন\n\n` +
+        `বট স্বয়ংক্রিয়ভাবে নতুন রেজাল্ট পাঠাবে।`;
     
     bot.sendMessage(chatId, welcomeMessage, { parse_mode: 'Markdown' });
 });
 
 bot.onText(/\/help/, (msg) => {
     const chatId = msg.chat.id;
-    const helpMessage = `📖 **Help Guide** 📖\n\n` +
-        `Commands:\n` +
-        `• /check - Get latest lottery result immediately\n` +
-        `• /status - Check bot connection status\n` +
-        `• /start - Restart bot\n` +
-        `• /help - Show this help\n\n` +
-        `⏰ Auto-update: Every 30 seconds\n` +
-        `📡 API: WinGo Lottery`;
+    const helpMessage = `📖 **হেল্প গাইড** 📖\n\n` +
+        `কমান্ড:\n` +
+        `• /check - এখনই রেজাল্ট দেখুন\n` +
+        `• /status - বট কানেকশন চেক করুন\n` +
+        `• /start - বট রিস্টার্ট করুন\n` +
+        `• /help - এই হেল্প দেখান\n\n` +
+        `⏰ অটো-আপডেট: প্রতি ৩০ সেকেন্ড`;
     
     bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown' });
 });
 
 bot.onText(/\/check/, async (msg) => {
     const chatId = msg.chat.id;
-    await bot.sendMessage(chatId, '🔍 Fetching latest lottery data...');
+    await bot.sendMessage(chatId, '🔍 ডেটা আনছে...');
     
     const data = await fetchLotteryData();
-    if (data) {
+    if (data && data.data && data.data.list) {
         const message = formatTelegramMessage(data);
         await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
     } else {
-        await bot.sendMessage(chatId, '❌ Failed to fetch data. Please try again later.');
+        await bot.sendMessage(chatId, '❌ ডেটা পাওয়া যায়নি। পরে আবার চেষ্টা করুন।');
     }
 });
 
 bot.onText(/\/status/, async (msg) => {
     const chatId = msg.chat.id;
-    const statusMessage = `✅ **Bot Status** ✅\n\n` +
-        `🟢 Bot is running\n` +
+    const statusMessage = `✅ **বট স্ট্যাটাস** ✅\n\n` +
+        `🟢 বট চলছে\n` +
         `📡 API: ${API_URL}\n` +
-        `⏰ Last check: ${new Date().toLocaleString()}\n` +
-        `📊 Last issue: ${lastIssueNumber || 'None'}\n` +
-        `🎲 Last result: ${lastResult || 'None'}\n` +
-        `🔄 Auto-update: Active (every 30s)`;
+        `⏰ শেষ চেক: ${new Date().toLocaleString()}\n` +
+        `📊 শেষ ইস্যু: ${lastIssueNumber || 'কোনটি নাই'}\n` +
+        `🎲 শেষ রেজাল্ট: ${lastResult || 'কোনটি নাই'}\n` +
+        `🔄 অটো-আপডেট: সক্রিয় (প্রতি ৩০ সেকেন্ড)`;
     
     await bot.sendMessage(chatId, statusMessage, { parse_mode: 'Markdown' });
 });
 
-// Auto-check every 30 seconds (since WinGo_30S suggests 30-second intervals)
+// 30 seconds interval
 cron.schedule('*/30 * * * * *', () => {
     checkAndSendNewData();
 });
 
-// Also check immediately on startup
-console.log('Starting Lottery Bot...');
+// Startup
+console.log('🚀 Lottery Bot Starting...');
 setTimeout(() => {
     checkAndSendNewData();
-}, 2000);
+}, 3000);
 
-// Error handling for bot
+// Error handlers
 bot.on('polling_error', (error) => {
     console.error('Polling error:', error);
 });
 
-bot.on('error', (error) => {
-    console.error('Bot error:', error);
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection:', reason);
 });
 
-console.log('Telegram Lottery Bot is running...');
-console.log(`Monitoring API: ${API_URL}`);
-console.log('Waiting for commands and auto-updates...');
+console.log('✅ Bot is running successfully');
