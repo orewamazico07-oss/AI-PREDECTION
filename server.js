@@ -17,22 +17,29 @@ async function sendTelegram(text) {
       {
         params: {
           chat_id: CHAT_ID,
-          text: text,
+          text,
         },
       }
     );
 
     console.log("Telegram Message Sent");
   } catch (e) {
-    console.log("Telegram Error");
-    console.log(e.message);
+    console.log("Telegram Error:", e.message);
   }
 }
 
 async function checkResult() {
   try {
     const response = await axios.get(
-      "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json"
+      "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json",
+      {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+          Accept: "application/json",
+          Referer: "https://draw.ar-lottery01.com/",
+        },
+      }
     );
 
     console.log("API HIT");
@@ -58,8 +65,7 @@ async function checkResult() {
       await sendTelegram(text);
     }
   } catch (e) {
-    console.log("API ERROR");
-    console.log(e.message);
+    console.log("API ERROR:", e.message);
   }
 }
 
