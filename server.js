@@ -8,10 +8,7 @@ const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = "7567919757:AAHm36nUzIdBY7GKMBds2xwAA6QfODBK8U4";
 const CHAT_ID = "8272290670";
 
-const API_URL =
-  "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
-
-let lastResult = "";
+let lastIssue = "";
 
 async function sendTelegram(text) {
   try {
@@ -26,52 +23,54 @@ async function sendTelegram(text) {
     );
 
     console.log("Telegram Message Sent");
-  } catch (err) {
-    console.log("Telegram Error:", err.message);
+  } catch (e) {
+    console.log("Telegram Error");
+    console.log(e.message);
   }
 }
 
-async function checkWingo() {
+async function checkResult() {
   try {
-    const response = await axios.get(API_URL);
+    const response = await axios.get(
+      "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json"
+    );
 
-    console.log(response.data);
+    console.log("API HIT");
 
     const result = response.data.data.list[0];
 
     const issue = result.issueNumber;
     const number = result.number;
 
-    const current = `${issue}-${number}`;
-
-    if (current !== lastResult) {
-      lastResult = current;
+    if (issue !== lastIssue) {
+      lastIssue = issue;
 
       const size =
         Number(number) >= 5 ? "BIG" : "SMALL";
 
-      const message =
+      const text =
 `🎯 WINGO RESULT
 
-🆔 Issue: ${issue}
-🔢 Number: ${number}
+🆔 ${issue}
+🔢 ${number}
 📌 ${size}`;
 
-      await sendTelegram(message);
+      await sendTelegram(text);
     }
-  } catch (err) {
-    console.log("API ERROR:", err.message);
+  } catch (e) {
+    console.log("API ERROR");
+    console.log(e.message);
   }
 }
 
-checkWingo();
+checkResult();
 
-setInterval(checkWingo, 30000);
+setInterval(checkResult, 30000);
 
 app.get("/", (req, res) => {
-  res.send("Bot Running Successfully");
+  res.send("BOT RUNNING");
 });
 
 app.listen(PORT, () => {
-  console.log("Server Running On Port " + PORT);
+  console.log("SERVER STARTED");
 });
