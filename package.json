@@ -1,7 +1,7 @@
 {
   "name": "wingo-telegram-bot",
   "version": "1.0.0",
-  "description": "Wingo Telegram Result Bot",
+  "description": "Wingo Telegram Bot",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
