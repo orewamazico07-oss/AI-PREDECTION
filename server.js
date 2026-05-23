@@ -12,6 +12,11 @@ const PORT = process.env.PORT || 3000;
 const API_URL =
 "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
 
+// LOCK SYSTEM
+
+let lockedPeriod = null;
+let lockedPrediction = null;
+
 let lastPrediction = null;
 let reverseMode = false;
 
@@ -138,7 +143,7 @@ function nextPeriod(issue){
 
 }
 
-function predict(history){
+function generatePrediction(history){
 
     const nums = history
     .slice(0,15)
@@ -318,6 +323,8 @@ app.get("/api/predict", async(req,res)=>{
         ? "BIG"
         : "SMALL";
 
+        // LOSS DETECT
+
         if(lastPrediction){
 
             if(lastPrediction !== actual){
@@ -328,14 +335,44 @@ app.get("/api/predict", async(req,res)=>{
 
         }
 
+        // LOCKED PREDICTION
+
+        if(
+
+            lockedPeriod === nextIssue &&
+
+            lockedPrediction
+
+        ){
+
+            return res.json({
+
+                period: lockedPeriod,
+
+                prediction: lockedPrediction
+
+            });
+
+        }
+
+        // GENERATE NEW
+
         const prediction =
-        predict(history);
+        generatePrediction(history);
+
+        // SAVE LOCK
+
+        lockedPeriod =
+        nextIssue;
+
+        lockedPrediction =
+        prediction;
 
         res.json({
 
-            period: nextIssue,
+            period: lockedPeriod,
 
-            prediction: prediction
+            prediction: lockedPrediction
 
         });
 
