@@ -1,126 +1,366 @@
+// server.js
+
 const express = require("express");
-const axios = require("axios");
+const cors = require("cors");
 
 const app = express();
 
+app.use(cors());
+
 const PORT = process.env.PORT || 3000;
 
-// TELEGRAM
-const BOT_TOKEN = "7567919757:AAHm36nUzIdBY7GKMBds2xwAA6QfODBK8U4";
-const CHAT_ID = "8272290670";
-
-// API
 const API_URL =
-  "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
+"https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
 
-let lastIssue = "";
+let lastPrediction = null;
+let reverseMode = false;
 
-// Telegram Message Function
-async function sendTelegram(text) {
-  try {
-    await axios.get(
-      `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
-      {
-        params: {
-          chat_id: CHAT_ID,
-          text: text,
-        },
-      }
+const FETCHERS = [
+
+(url) => url,
+
+(url) =>
+`https://corsproxy.io/?${encodeURIComponent(url)}`,
+
+(url) =>
+`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+
+(url) =>
+`https://cors.isomorphic-git.org/${url}`,
+
+(url) =>
+`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`
+
+];
+
+async function smartFetch(){
+
+    for(const buildUrl of FETCHERS){
+
+        try{
+
+            const controller =
+            new AbortController();
+
+            const timeout =
+            setTimeout(()=>{
+
+                controller.abort();
+
+            },8000);
+
+            const response = await fetch(
+
+                buildUrl(API_URL),
+
+                {
+                    signal:controller.signal,
+                    headers:{
+                        "User-Agent":"Mozilla/5.0"
+                    }
+                }
+
+            );
+
+            clearTimeout(timeout);
+
+            if(!response.ok){
+
+                continue;
+
+            }
+
+            const text =
+            await response.text();
+
+            let json;
+
+            try{
+
+                json = JSON.parse(text);
+
+            }catch{
+
+                continue;
+
+            }
+
+            return json;
+
+        }catch(err){
+
+            console.log(
+                "FETCH FAILED:",
+                err.message
+            );
+
+        }
+
+    }
+
+    throw new Error(
+        "ALL FETCH METHODS FAILED"
     );
 
-    console.log("Telegram Message Sent");
-  } catch (err) {
-    console.log("Telegram Error:", err.message);
-  }
 }
 
-// Fetch Wingo Result
-async function checkResult() {
-  try {
-    const response = await axios({
-      method: "POST",
-      url: API_URL,
+function getHistory(data){
 
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
+    if(data?.data?.list){
 
-        Accept: "application/json, text/plain, */*",
+        return data.data.list;
 
-        Origin: "https://draw.ar-lottery01.com",
+    }
 
-        Referer: "https://draw.ar-lottery01.com/",
+    if(data?.list){
 
-        "Content-Type": "application/json",
-      },
+        return data.list;
 
-      data: {},
+    }
+
+    return [];
+
+}
+
+function nextPeriod(issue){
+
+    try{
+
+        return String(
+            BigInt(issue) + 1n
+        );
+
+    }catch{
+
+        return "UNKNOWN";
+
+    }
+
+}
+
+function predict(history){
+
+    const nums = history
+    .slice(0,15)
+    .map(x=>
+
+        Number(
+            x.number ||
+            x.openNumber ||
+            0
+        )
+
+    );
+
+    let big = 0;
+    let small = 0;
+
+    nums.forEach(n=>{
+
+        if(n >= 5){
+
+            big++;
+
+        }else{
+
+            small++;
+
+        }
+
     });
 
-    console.log("API HIT SUCCESS");
+    let streak = 1;
+    let current = 1;
 
-    const result = response.data.data.list[0];
+    for(let i=1;i<nums.length;i++){
 
-    const issue =
-      result.issueNumber ||
-      result.issue ||
-      "Unknown";
+        const now =
+        nums[i] >= 5;
 
-    const number =
-      result.number ||
-      result.openNumber ||
-      "0";
+        const prev =
+        nums[i-1] >= 5;
 
-    const currentIssue = `${issue}-${number}`;
+        if(now === prev){
 
-    // Duplicate আটকাবে
-    if (currentIssue !== lastIssue) {
-      lastIssue = currentIssue;
+            current++;
 
-      const size =
-        Number(number) >= 5
-          ? "BIG"
-          : "SMALL";
+            streak =
+            Math.max(
+                streak,
+                current
+            );
 
-      const message =
-`🎯 WINGO RESULT
+        }else{
 
-🆔 Issue : ${issue}
+            current = 1;
 
-🔢 Number : ${number}
+        }
 
-📌 Size : ${size}
-
-⏰ Auto Updated`;
-
-      await sendTelegram(message);
     }
-  } catch (err) {
-    console.log(
-      "API ERROR:",
-      err.response?.status || err.message
-    );
 
-    console.log(
-      err.response?.data || "No Response"
-    );
-  }
+    const latest =
+
+    nums[0] >= 5
+    ? "BIG"
+    : "SMALL";
+
+    let prediction;
+
+    // LOSS RECOVERY
+
+    if(reverseMode){
+
+        prediction =
+
+        lastPrediction === "BIG"
+        ? "SMALL"
+        : "BIG";
+
+        reverseMode = false;
+
+    }
+
+    // LONG STREAK REVERSAL
+
+    else if(streak >= 4){
+
+        prediction =
+
+        latest === "BIG"
+        ? "SMALL"
+        : "BIG";
+
+    }
+
+    // PRESSURE
+
+    else if(big > small + 2){
+
+        prediction = "SMALL";
+
+    }
+
+    else if(small > big + 2){
+
+        prediction = "BIG";
+
+    }
+
+    // MOMENTUM
+
+    else{
+
+        prediction = latest;
+
+    }
+
+    lastPrediction = prediction;
+
+    return prediction;
+
 }
 
-// Start
-checkResult();
+app.get("/",(req,res)=>{
 
-// Every 30 Seconds
-setInterval(checkResult, 30000);
+    res.json({
 
-// Home Route
-app.get("/", (req, res) => {
-  res.send("WINGO BOT RUNNING");
+        status:true,
+
+        message:
+        "Prediction API Running"
+
+    });
+
 });
 
-// Server
-app.listen(PORT, () => {
-  console.log(
-    `SERVER STARTED ON PORT ${PORT}`
-  );
+app.get("/api/predict", async(req,res)=>{
+
+    try{
+
+        const raw =
+        await smartFetch();
+
+        const history =
+        getHistory(raw);
+
+        if(!history.length){
+
+            return res.status(500).json({
+
+                success:false,
+
+                error:"NO HISTORY"
+
+            });
+
+        }
+
+        const latest =
+        history[0];
+
+        const currentIssue =
+
+        latest.issueNumber ||
+        latest.issue ||
+        latest.gameId;
+
+        const nextIssue =
+        nextPeriod(currentIssue);
+
+        const actual =
+
+        Number(
+            latest.number ||
+            latest.openNumber ||
+            0
+        ) >= 5
+
+        ? "BIG"
+        : "SMALL";
+
+        if(lastPrediction){
+
+            if(lastPrediction !== actual){
+
+                reverseMode = true;
+
+            }
+
+        }
+
+        const prediction =
+        predict(history);
+
+        res.json({
+
+            period: nextIssue,
+
+            prediction: prediction
+
+        });
+
+    }catch(err){
+
+        console.log(err);
+
+        res.status(500).json({
+
+            success:false,
+
+            error:err.message
+
+        });
+
+    }
+
+});
+
+app.listen(PORT,()=>{
+
+    console.log(
+
+        `SERVER RUNNING ${PORT}`
+
+    );
+
 });
