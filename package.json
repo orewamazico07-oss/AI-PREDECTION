@@ -1,13 +1,14 @@
 {
-  "name": "wingo-telegram-bot",
+  "name": "prediction-api",
   "version": "1.0.0",
-  "description": "Wingo Telegram Bot",
+  "description": " Pattern Analysis API",
   "main": "server.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "axios": "^1.7.2",
+    "cors": "^2.8.5",
     "express": "^4.19.2"
   }
 }
