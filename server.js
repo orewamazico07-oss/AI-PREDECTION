@@ -9,8 +9,8 @@ app.use(express.json());
 const API = "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
 
 // ---------- GLOBAL MEMORY ----------
-let predictionHistory = [];      // last predictions made
-let actualResultHistory = [];    // last actual results
+let predictionHistory = [];
+let actualResultHistory = [];
 let reverseMode = false;
 
 // ---------- CORE PREDICTION (TREND BASED) ----------
@@ -62,11 +62,29 @@ function generateFinalPrediction(results) {
     return base;
 }
 
+// ---------- FETCH WITH HEADERS (SOLUTION) ----------
+async function fetchWithHeaders() {
+    const response = await fetch(API, {
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://www.google.com/',
+            'Origin': 'https://draw.ar-lottery01.com'
+        }
+    });
+    
+    if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    return await response.json();
+}
+
 // ---------- API: GET PREDICTION FOR NEXT PERIOD ----------
 app.get('/api/prediction', async (req, res) => {
     try {
-        const response = await fetch(API);
-        const data = await response.json();
+        const data = await fetchWithHeaders();
         const list = data.data.list;
         
         if (!list || list.length === 0) {
@@ -83,16 +101,14 @@ app.get('/api/prediction', async (req, res) => {
         predictionHistory.push(newPred);
         if (predictionHistory.length > 50) predictionHistory.shift();
         
-        // store actual result for the previous period (matching with prediction)
-        if (predictionHistory.length > 0 && actualResultHistory.length + 1 <= predictionHistory.length) {
-            actualResultHistory.push(actualResult);
-            if (actualResultHistory.length > 50) actualResultHistory.shift();
-        }
+        // store actual result
+        actualResultHistory.push(actualResult);
+        if (actualResultHistory.length > 50) actualResultHistory.shift();
         
         // update reverse mode based on last 5 performance
         updateReverseMode();
         
-        // recalc prediction with updated reverse mode (if changed)
+        // recalc prediction with updated reverse mode
         let finalPred = generateFinalPrediction(list);
         if (predictionHistory.length > 0) {
             predictionHistory[predictionHistory.length - 1] = finalPred;
@@ -113,14 +129,18 @@ app.get('/api/prediction', async (req, res) => {
         });
         
     } catch (error) {
-        console.error("Error:", error);
-        res.status(500).json({ prediction: "WAIT", error: error.message });
+        console.error("Error:", error.message);
+        res.status(500).json({ 
+            prediction: "WAIT", 
+            error: error.message,
+            suggestion: "Check API or network"
+        });
     }
 });
 
 // ---------- HEALTH CHECK ----------
 app.get('/', (req, res) => {
-    res.send('Prediction Bot Running...');
+    res.send('Prediction Bot Running... (Fixed with headers)');
 });
 
 const PORT = process.env.PORT || 3000;
