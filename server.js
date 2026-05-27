@@ -2,402 +2,200 @@
 
 const express = require("express");
 const cors = require("cors");
+const fetch = require("node-fetch");
 
 const app = express();
-
-app.use(cors());
-
 const PORT = process.env.PORT || 3000;
 
-const API_URL =
-"https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
+app.use(cors());
+app.use(express.json());
 
-// LOCK SYSTEM
+const API =
+  "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
 
-let lockedPeriod = null;
-let lockedPrediction = null;
-
-let lastPrediction = null;
+let predictionHistory = [];
+let actualResultHistory = [];
 let reverseMode = false;
+let latestData = null;
 
-const FETCHERS = [
+// BASE PREDICTION
+function getBasePrediction(results) {
+  if (!results || results.length < 3) return "WAIT";
 
-(url) => url,
+  let recent10 = results
+    .slice(0, 10)
+    .map((i) => (parseInt(i.number) >= 5 ? "BIG" : "SMALL"));
 
-(url) =>
-`https://corsproxy.io/?${encodeURIComponent(url)}`,
+  let last5 = recent10.slice(0, 5);
 
-(url) =>
-`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  let bigCount = last5.filter((r) => r === "BIG").length;
+  let smallCount = last5.filter((r) => r === "SMALL").length;
 
-(url) =>
-`https://cors.isomorphic-git.org/${url}`,
+  let pred =
+    bigCount >= 3
+      ? "BIG"
+      : smallCount >= 3
+      ? "SMALL"
+      : "WAIT";
 
-(url) =>
-`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`
+  // streak system
+  if (
+    recent10[0] === recent10[1] &&
+    recent10[1] === recent10[2]
+  ) {
+    pred = recent10[0] === "BIG" ? "SMALL" : "BIG";
+  }
 
-];
+  // zigzag system
+  if (
+    recent10[0] !== recent10[1] &&
+    recent10[1] !== recent10[2] &&
+    recent10[2] !== recent10[3]
+  ) {
+    pred = recent10[0];
+  }
 
-async function smartFetch(){
-
-    for(const buildUrl of FETCHERS){
-
-        try{
-
-            const controller =
-            new AbortController();
-
-            const timeout =
-            setTimeout(()=>{
-
-                controller.abort();
-
-            },8000);
-
-            const response = await fetch(
-
-                buildUrl(API_URL),
-
-                {
-                    signal:controller.signal,
-                    headers:{
-                        "User-Agent":"Mozilla/5.0"
-                    }
-                }
-
-            );
-
-            clearTimeout(timeout);
-
-            if(!response.ok){
-
-                continue;
-
-            }
-
-            const text =
-            await response.text();
-
-            let json;
-
-            try{
-
-                json = JSON.parse(text);
-
-            }catch{
-
-                continue;
-
-            }
-
-            return json;
-
-        }catch(err){
-
-            console.log(
-                "FETCH FAILED:",
-                err.message
-            );
-
-        }
-
-    }
-
-    throw new Error(
-        "ALL FETCH METHODS FAILED"
-    );
-
+  return pred;
 }
 
-function getHistory(data){
+// REVERSE MODE
+function updateReverseMode() {
+  if (
+    predictionHistory.length < 5 ||
+    actualResultHistory.length < 5
+  )
+    return;
 
-    if(data?.data?.list){
+  let last5Pred = predictionHistory.slice(-5);
+  let last5Actual = actualResultHistory.slice(-5);
 
-        return data.data.list;
+  let lossCount = 0;
 
+  for (let i = 0; i < 5; i++) {
+    if (last5Pred[i] !== last5Actual[i]) {
+      lossCount++;
     }
+  }
 
-    if(data?.list){
-
-        return data.list;
-
-    }
-
-    return [];
-
+  reverseMode = lossCount >= 3;
 }
 
-function nextPeriod(issue){
+// FINAL PREDICTION
+function generatePrediction(history) {
+  let base = getBasePrediction(history);
 
-    try{
+  if (base === "WAIT") return "WAIT";
 
-        return String(
-            BigInt(issue) + 1n
-        );
+  if (reverseMode) {
+    return base === "BIG" ? "SMALL" : "BIG";
+  }
 
-    }catch{
-
-        return "UNKNOWN";
-
-    }
-
+  return base;
 }
 
-function generatePrediction(history){
+// UPDATE SYSTEM
+async function updateGameData() {
+  try {
+    const res = await fetch(API);
+    const data = await res.json();
 
-    const nums = history
-    .slice(0,15)
-    .map(x=>
+    const list = data.data.list;
 
-        Number(
-            x.number ||
-            x.openNumber ||
-            0
-        )
+    const lastIssue = String(list[0].issueNumber);
+    const nextPeriod = String(BigInt(lastIssue) + 1n);
 
-    );
+    let prediction = generatePrediction(list);
 
-    let big = 0;
-    let small = 0;
+    predictionHistory.push(prediction);
 
-    nums.forEach(n=>{
+    if (predictionHistory.length > 50) {
+      predictionHistory.shift();
+    }
 
-        if(n >= 5){
+    const actualResult =
+      parseInt(list[0].number) >= 5 ? "BIG" : "SMALL";
 
-            big++;
+    if (
+      actualResultHistory.length + 1 <= predictionHistory.length
+    ) {
+      actualResultHistory.push(actualResult);
 
-        }else{
+      if (actualResultHistory.length > 50) {
+        actualResultHistory.shift();
+      }
+    }
 
-            small++;
+    updateReverseMode();
 
-        }
+    prediction = generatePrediction(list);
 
+    predictionHistory[predictionHistory.length - 1] =
+      prediction;
+
+    latestData = {
+      success: true,
+      period: nextPeriod,
+      prediction,
+      reverseMode,
+      history: list.slice(0, 10).map((i) => ({
+        issueNumber: i.issueNumber,
+        number: i.number,
+        result:
+          parseInt(i.number) >= 5 ? "BIG" : "SMALL",
+      })),
+      bots: {
+        rex:
+          prediction === "WAIT"
+            ? "WAIT"
+            : prediction,
+        xr:
+          prediction === "WAIT"
+            ? "WAIT"
+            : prediction === "BIG"
+            ? "SMALL"
+            : "BIG",
+      },
+    };
+
+    console.log("UPDATED:", prediction, nextPeriod);
+  } catch (err) {
+    console.log(err);
+  }
+}
+
+// AUTO UPDATE EVERY 30 SEC
+setInterval(() => {
+  const sec = new Date().getSeconds();
+
+  if (sec === 0 || sec === 30) {
+    updateGameData();
+  }
+}, 1000);
+
+updateGameData();
+
+// API ROUTE
+app.get("/api/predict", async (req, res) => {
+  try {
+    if (!latestData) {
+      await updateGameData();
+    }
+
+    res.json(latestData);
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message,
     });
-
-    let streak = 1;
-    let current = 1;
-
-    for(let i=1;i<nums.length;i++){
-
-        const now =
-        nums[i] >= 5;
-
-        const prev =
-        nums[i-1] >= 5;
-
-        if(now === prev){
-
-            current++;
-
-            streak =
-            Math.max(
-                streak,
-                current
-            );
-
-        }else{
-
-            current = 1;
-
-        }
-
-    }
-
-    const latest =
-
-    nums[0] >= 5
-    ? "BIG"
-    : "SMALL";
-
-    let prediction;
-
-    // LOSS RECOVERY
-
-    if(reverseMode){
-
-        prediction =
-
-        lastPrediction === "BIG"
-        ? "SMALL"
-        : "BIG";
-
-        reverseMode = false;
-
-    }
-
-    // LONG STREAK REVERSAL
-
-    else if(streak >= 4){
-
-        prediction =
-
-        latest === "BIG"
-        ? "SMALL"
-        : "BIG";
-
-    }
-
-    // PRESSURE
-
-    else if(big > small + 2){
-
-        prediction = "SMALL";
-
-    }
-
-    else if(small > big + 2){
-
-        prediction = "BIG";
-
-    }
-
-    // MOMENTUM
-
-    else{
-
-        prediction = latest;
-
-    }
-
-    lastPrediction = prediction;
-
-    return prediction;
-
-}
-
-app.get("/",(req,res)=>{
-
-    res.json({
-
-        status:true,
-
-        message:
-        "Prediction API Running"
-
-    });
-
+  }
 });
 
-app.get("/api/predict", async(req,res)=>{
-
-    try{
-
-        const raw =
-        await smartFetch();
-
-        const history =
-        getHistory(raw);
-
-        if(!history.length){
-
-            return res.status(500).json({
-
-                success:false,
-
-                error:"NO HISTORY"
-
-            });
-
-        }
-
-        const latest =
-        history[0];
-
-        const currentIssue =
-
-        latest.issueNumber ||
-        latest.issue ||
-        latest.gameId;
-
-        const nextIssue =
-        nextPeriod(currentIssue);
-
-        const actual =
-
-        Number(
-            latest.number ||
-            latest.openNumber ||
-            0
-        ) >= 5
-
-        ? "BIG"
-        : "SMALL";
-
-        // LOSS DETECT
-
-        if(lastPrediction){
-
-            if(lastPrediction !== actual){
-
-                reverseMode = true;
-
-            }
-
-        }
-
-        // LOCKED PREDICTION
-
-        if(
-
-            lockedPeriod === nextIssue &&
-
-            lockedPrediction
-
-        ){
-
-            return res.json({
-
-                period: lockedPeriod,
-
-                prediction: lockedPrediction
-
-            });
-
-        }
-
-        // GENERATE NEW
-
-        const prediction =
-        generatePrediction(history);
-
-        // SAVE LOCK
-
-        lockedPeriod =
-        nextIssue;
-
-        lockedPrediction =
-        prediction;
-
-        res.json({
-
-            period: lockedPeriod,
-
-            prediction: lockedPrediction
-
-        });
-
-    }catch(err){
-
-        console.log(err);
-
-        res.status(500).json({
-
-            success:false,
-
-            error:err.message
-
-        });
-
-    }
-
+// ROOT
+app.get("/", (req, res) => {
+  res.send("P4!N X SERVER RUNNING");
 });
 
-app.listen(PORT,()=>{
-
-    console.log(
-
-        `SERVER RUNNING ${PORT}`
-
-    );
-
+// START
+app.listen(PORT, () => {
+  console.log(`SERVER RUNNING ON ${PORT}`);
 });
